@@ -31,6 +31,7 @@ export function AgentsSkillsTab() {
 
   const userSkills = skills.filter((s) => s.source === "user")
   const projectSkills = skills.filter((s) => s.source === "project")
+  const systemSkills = skills.filter((s) => s.source === "system")
 
   const handleExpandSkill = (skillName: string) => {
     setExpandedSkillName(expandedSkillName === skillName ? null : skillName)
@@ -75,7 +76,7 @@ export function AgentsSkillsTab() {
               No skills found
             </p>
             <p className="text-xs text-muted-foreground">
-              Add skills to <code className="px-1 py-0.5 bg-muted rounded">~/.claude/skills/</code> or <code className="px-1 py-0.5 bg-muted rounded">.claude/skills/</code>
+              Add skills to <code className="px-1 py-0.5 bg-muted rounded">~/.claude/skills/</code>, <code className="px-1 py-0.5 bg-muted rounded">.claude/skills/</code>, or <code className="px-1 py-0.5 bg-muted rounded">/mnt/skills/</code>
             </p>
           </div>
         ) : (
@@ -123,6 +124,28 @@ export function AgentsSkillsTab() {
                 </div>
               </div>
             )}
+
+            {/* System Skills */}
+            {systemSkills.length > 0 && (
+              <div className="space-y-2">
+                <div className="text-xs text-muted-foreground">
+                  /mnt/skills/
+                </div>
+                <div className="bg-background rounded-lg border border-border overflow-hidden">
+                  <div className="divide-y divide-border">
+                    {systemSkills.map((skill) => (
+                      <SkillRow
+                        key={skill.name}
+                        skill={skill}
+                        isExpanded={expandedSkillName === skill.name}
+                        onToggle={() => handleExpandSkill(skill.name)}
+                        onOpenInFinder={() => handleOpenInFinder(skill.path)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -156,7 +179,7 @@ function SkillRow({
   onToggle,
   onOpenInFinder,
 }: {
-  skill: { name: string; description: string; source: "user" | "project"; path: string }
+  skill: { name: string; description: string; source: "user" | "project" | "system"; path: string }
   isExpanded: boolean
   onToggle: () => void
   onOpenInFinder: () => void

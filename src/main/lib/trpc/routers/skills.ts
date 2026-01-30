@@ -8,7 +8,7 @@ import matter from "gray-matter"
 interface FileSkill {
   name: string
   description: string
-  source: "user" | "project"
+  source: "user" | "project" | "system"
   path: string
 }
 
@@ -33,7 +33,7 @@ function parseSkillMd(content: string): { name?: string; description?: string } 
  */
 async function scanSkillsDirectory(
   dir: string,
-  source: "user" | "project",
+  source: "user" | "project" | "system",
   basePath?: string, // For project skills, the cwd to make paths relative to
 ): Promise<FileSkill[]> {
   const skills: FileSkill[] = []
@@ -93,6 +93,9 @@ async function scanSkillsDirectory(
   return skills
 }
 
+// System-wide skills directory (e.g. mounted in container environments)
+const SYSTEM_SKILLS_DIR = "/mnt/skills"
+
 // Shared procedure for listing skills
 const listSkillsProcedure = publicProcedure
   .input(
@@ -106,19 +109,22 @@ const listSkillsProcedure = publicProcedure
     const userSkillsDir = path.join(os.homedir(), ".claude", "skills")
     const userSkillsPromise = scanSkillsDirectory(userSkillsDir, "user")
 
+    const systemSkillsPromise = scanSkillsDirectory(SYSTEM_SKILLS_DIR, "system")
+
     let projectSkillsPromise = Promise.resolve<FileSkill[]>([])
     if (input?.cwd) {
       const projectSkillsDir = path.join(input.cwd, ".claude", "skills")
       projectSkillsPromise = scanSkillsDirectory(projectSkillsDir, "project", input.cwd)
     }
 
-    // Scan both directories in parallel
-    const [userSkills, projectSkills] = await Promise.all([
+    // Scan all directories in parallel
+    const [userSkills, projectSkills, systemSkills] = await Promise.all([
       userSkillsPromise,
       projectSkillsPromise,
+      systemSkillsPromise,
     ])
 
-    return [...projectSkills, ...userSkills]
+    return [...projectSkills, ...userSkills, ...systemSkills]
   })
 
 export const skillsRouter = router({
@@ -126,6 +132,7 @@ export const skillsRouter = router({
    * List all skills from filesystem
    * - User skills: ~/.claude/skills/
    * - Project skills: .claude/skills/ (relative to cwd)
+   * - System skills: /mnt/skills/ (mounted in container environments)
    */
   list: listSkillsProcedure,
 
