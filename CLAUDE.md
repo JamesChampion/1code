@@ -2,232 +2,117 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## What is this?
+## Project Overview
 
-**21st Agents** - A local-first Electron desktop app for AI-powered code assistance. Users create chat sessions linked to local project folders, interact with Claude in Plan or Agent mode, and see real-time tool execution (bash, file edits, web search, etc.).
+**1Code** — An Electron desktop app providing a visual UI for AI-powered code assistance. Users create chat sessions linked to local project folders, interact with Claude in Plan or Agent mode, and see real-time tool execution (bash, file edits, web search). Built by the 21st.dev team.
 
 ## Commands
 
 ```bash
 # Development
-bun run dev              # Start Electron with hot reload
+bun install                  # Install deps (rebuilds better-sqlite3, node-pty)
+bun run claude:download      # Download Claude CLI binary (required first time)
+bun run dev                  # Start Electron with hot reload
+bun run ts:check             # TypeScript validation (uses tsgo)
 
-# Build
-bun run build            # Compile app
-bun run package          # Package for current platform (dir)
-bun run package:mac      # Build macOS (DMG + ZIP)
-bun run package:win      # Build Windows (NSIS + portable)
-bun run package:linux    # Build Linux (AppImage + DEB)
+# Build & Package
+bun run build                # Compile TypeScript
+bun run package              # Package for current platform (dir output)
+bun run package:mac          # macOS (DMG + ZIP, arm64 + x64)
+bun run package:win          # Windows (NSIS + portable)
+bun run package:linux        # Linux (AppImage + DEB)
 
-# Database (Drizzle + SQLite)
-bun run db:generate      # Generate migrations from schema
-bun run db:push          # Push schema directly (dev only)
+# Database
+bun run db:generate          # Generate Drizzle migrations from schema
+bun run db:push              # Push schema directly (dev only)
+bun run db:studio            # Open Drizzle Studio
+
+# Release (full pipeline: build, sign, notarize, upload to R2 CDN)
+bun run release
 ```
+
+There is no test suite or linter configured in this project.
 
 ## Architecture
 
+Three-process Electron app with tRPC for type-safe IPC:
+
+- **Main process** (`src/main/`) — Electron lifecycle, SQLite database, tRPC routers, auth, Claude SDK integration, git operations, terminal management
+- **Preload** (`src/preload/index.ts`) — Context-isolated IPC bridge exposing `window.desktopApi` (window controls, auth, file watchers, auto-update) and tRPC bridge
+- **Renderer** (`src/renderer/`) — React 19 UI with Jotai (UI state), Zustand (complex stores), and React Query via tRPC (server state)
+
+### Main Process Key Areas
+
+| Directory | Purpose |
+|-----------|---------|
+| `src/main/lib/db/` | Drizzle ORM + better-sqlite3, WAL mode, auto-migration on startup |
+| `src/main/lib/trpc/routers/` | 15 tRPC routers: projects, chats, claude, claudeCode, claudeSettings, ollama, terminal, external, files, debug, skills, agents, worktreeConfig, commands, voice |
+| `src/main/lib/claude/` | Claude SDK integration (env, binary, offline fallback, raw logger, transform) |
+| `src/main/lib/git/` | Git operations, worktree management, file watchers, GitHub integration |
+| `src/main/lib/terminal/` | Terminal sessions via node-pty, port scanning |
+| `src/main/auth-manager.ts` | OAuth token management with auto-refresh (5 min before expiry) |
+| `src/main/auth-store.ts` | Encrypted credential storage via Electron safeStorage |
+
+### Renderer Key Areas
+
+| Directory | Purpose |
+|-----------|---------|
+| `src/renderer/features/agents/` | Core chat interface: message list, input area, tool renderers (40+ tool components), slash commands, mentions |
+| `src/renderer/features/agents/atoms/` | Jotai atoms: `selectedAgentChatIdAtom` (window-scoped), preview settings per chat |
+| `src/renderer/features/agents/stores/` | Zustand stores: sub-chat tabs, message caching, streaming status |
+| `src/renderer/features/sidebar/` | Chat list, archive, navigation |
+| `src/renderer/features/changes/` | Git UI: staging, commits, diff views |
+| `src/renderer/features/terminal/` | xterm.js wrapper with search and link detection |
+| `src/renderer/features/details-sidebar/` | Collapsible right sidebar (changes, diff, terminal, plan widgets) |
+| `src/renderer/components/dialogs/` | Settings dialog (profile, appearance, MCP, skills, agents, models, debug) |
+
+### Database
+
+SQLite at `{userData}/data/agents.db`. Schema source of truth: `src/main/lib/db/schema/index.ts`
+
 ```
-src/
-├── main/                    # Electron main process
-│   ├── index.ts             # App entry, window lifecycle
-│   ├── auth-manager.ts      # OAuth flow, token refresh
-│   ├── auth-store.ts        # Encrypted credential storage (safeStorage)
-│   ├── windows/main.ts      # Window creation, IPC handlers
-│   └── lib/
-│       ├── db/              # Drizzle + SQLite
-│       │   ├── index.ts     # DB init, auto-migrate on startup
-│       │   ├── schema/      # Drizzle table definitions
-│       │   └── utils.ts     # ID generation
-│       └── trpc/routers/    # tRPC routers (projects, chats, claude)
-│
-├── preload/                 # IPC bridge (context isolation)
-│   └── index.ts             # Exposes desktopApi + tRPC bridge
-│
-└── renderer/                # React 19 UI
-    ├── App.tsx              # Root with providers
-    ├── features/
-    │   ├── agents/          # Main chat interface
-    │   │   ├── main/        # active-chat.tsx, new-chat-form.tsx
-    │   │   ├── ui/          # Tool renderers, preview, diff view
-    │   │   ├── commands/    # Slash commands (/plan, /agent, /clear)
-    │   │   ├── atoms/       # Jotai atoms for agent state
-    │   │   └── stores/      # Zustand store for sub-chats
-    │   ├── sidebar/         # Chat list, archive, navigation
-    │   ├── sub-chats/       # Tab/sidebar sub-chat management
-    │   └── layout/          # Main layout with resizable panels
-    ├── components/ui/       # Radix UI wrappers (button, dialog, etc.)
-    └── lib/
-        ├── atoms/           # Global Jotai atoms
-        ├── stores/          # Global Zustand stores
-        ├── trpc.ts          # Real tRPC client
-        └── mock-api.ts      # DEPRECATED - being replaced with real tRPC
-```
-
-## Database (Drizzle ORM)
-
-**Location:** `{userData}/data/agents.db` (SQLite)
-
-**Schema:** `src/main/lib/db/schema/index.ts`
-
-```typescript
-// Three main tables:
-projects    → id, name, path (local folder), timestamps
-chats       → id, name, projectId, worktree fields, timestamps
-sub_chats   → id, name, chatId, sessionId, mode, messages (JSON)
+projects    → id, name, path (unique), git remote fields, timestamps
+chats       → id, name, projectId (FK), worktree fields, PR tracking, timestamps
+sub_chats   → id, name, chatId (FK), sessionId, streamId, mode, messages (JSON), timestamps
+claudeCodeCredentials → single-row OAuth token storage
 ```
 
-**Auto-migration:** On app start, `initDatabase()` runs migrations from `drizzle/` folder (dev) or `resources/migrations` (packaged).
-
-**Queries:**
-```typescript
-import { getDatabase, projects, chats } from "../lib/db"
-import { eq } from "drizzle-orm"
-
-const db = getDatabase()
-const allProjects = db.select().from(projects).all()
-const projectChats = db.select().from(chats).where(eq(chats.projectId, id)).all()
-```
+Migrations live in `drizzle/` (dev) or `resources/migrations` (packaged). Auto-run on startup via `initDatabase()`.
 
 ## Key Patterns
 
-### IPC Communication
-- Uses **tRPC** with `trpc-electron` for type-safe main↔renderer communication
-- All backend calls go through tRPC routers, not raw IPC
-- Preload exposes `window.desktopApi` for native features (window controls, clipboard, notifications)
+- **All backend calls use tRPC** — no raw IPC. Routers in `src/main/lib/trpc/routers/`, client in `src/renderer/lib/trpc.ts`
+- **Window-scoped state** — each Electron window maintains its own selected chat via Jotai atoms
+- **Claude SDK** — dynamic import of `@anthropic-ai/claude-agent-sdk`. Two modes: "plan" (read-only) and "agent" (full permissions). Session resume via `sessionId` stored in SubChat. Message streaming via tRPC observable (`claude.onMessage`)
+- **Worktree isolation** — each chat gets its own git worktree for code changes
+- **MCP integration** — Model Context Protocol servers with OAuth authentication (`src/main/lib/mcp-auth.ts`)
+- **Multi-window support** — window ID extracted from URL hash/params via `WindowContext`
+- **Auto-update** — checks `https://cdn.21st.dev/releases/desktop/latest-mac.yml` on startup and window focus (1 min cooldown)
+- **Dev vs Prod isolation** — dev uses `twentyfirst-agents-dev://` protocol and separate userData path (`Agents Dev/`)
 
-### State Management
-- **Jotai**: UI state (selected chat, sidebar open, preview settings)
-- **Zustand**: Sub-chat tabs and pinned state (persisted to localStorage)
-- **React Query**: Server state via tRPC (auto-caching, refetch)
+## File Naming Conventions
 
-### Claude Integration
-- Dynamic import of `@anthropic-ai/claude-code` SDK
-- Two modes: "plan" (read-only) and "agent" (full permissions)
-- Session resume via `sessionId` stored in SubChat
-- Message streaming via tRPC subscription (`claude.onMessage`)
-
-## Tech Stack
-
-| Layer | Tech |
-|-------|------|
-| Desktop | Electron 33.4.5, electron-vite, electron-builder |
-| UI | React 19, TypeScript 5.4.5, Tailwind CSS |
-| Components | Radix UI, Lucide icons, Motion, Sonner |
-| State | Jotai, Zustand, React Query |
-| Backend | tRPC, Drizzle ORM, better-sqlite3 |
-| AI | @anthropic-ai/claude-code |
-| Package Manager | bun |
-
-## File Naming
-
-- Components: PascalCase (`ActiveChat.tsx`, `AgentsSidebar.tsx`)
+- Components: PascalCase (`ActiveChat.tsx`)
 - Utilities/hooks: camelCase (`useFileUpload.ts`, `formatters.ts`)
-- Stores: kebab-case (`sub-chat-store.ts`, `agent-chat-store.ts`)
+- Stores: kebab-case (`sub-chat-store.ts`)
 - Atoms: camelCase with `Atom` suffix (`selectedAgentChatIdAtom`)
 
-## Important Files
+## Build Configuration
 
-- `electron.vite.config.ts` - Build config (main/preload/renderer entries)
-- `src/main/lib/db/schema/index.ts` - Drizzle schema (source of truth)
-- `src/main/lib/db/index.ts` - DB initialization + auto-migrate
-- `src/renderer/features/agents/atoms/index.ts` - Agent UI state atoms
-- `src/renderer/features/agents/main/active-chat.tsx` - Main chat component
-- `src/main/lib/trpc/routers/claude.ts` - Claude SDK integration
+- **electron-vite** bundles three targets (main, preload, renderer)
+- Main process: CJS output, externalizes better-sqlite3 and claude-agent-sdk
+- Renderer: two entry points (`index.html`, `login.html`), path alias `@` → `src/renderer/`
+- ASAR with unpacking for: better-sqlite3, node-pty, claude-agent-sdk
+- `postinstall` rebuilds native modules for Electron
 
-## Debugging First Install Issues
+## Important Gotchas
 
-When testing auth flows or behavior for new users, you need to simulate a fresh install:
+- `bun run claude:download` must be run before first `bun run dev` — without the Claude binary, agent chat won't function
+- The `mock-api.ts` in renderer is DEPRECATED — all new code should use real tRPC calls
+- DevTools unlock requires 5 clicks on a hidden UI element (not exposed by default)
+- Protocol handler registration on macOS may not work on first app launch — users may need to click "Sign in" again
+- Analytics (PostHog) and error tracking (Sentry) are disabled in open source builds unless env vars are set in `.env.local`
 
-```bash
-# 1. Clear all app data (auth, database, settings)
-rm -rf ~/Library/Application\ Support/Agents\ Dev/
+## Compact Instructions
 
-# 2. Reset macOS protocol handler registration (if testing deep links)
-/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister -kill -r -domain local -domain system -domain user
-
-# 3. Clear app preferences
-defaults delete dev.21st.agents.dev  # Dev mode
-defaults delete dev.21st.agents      # Production
-
-# 4. Run in dev mode with clean state
-cd apps/desktop
-bun run dev
-```
-
-**Common First-Install Bugs:**
-- **OAuth deep link not working**: macOS Launch Services may not immediately recognize protocol handlers on first app launch. User may need to click "Sign in" again after the first attempt.
-- **Folder dialog not appearing**: Window focus timing issues on first launch. Fixed by ensuring window focus before showing `dialog.showOpenDialog()`.
-
-**Dev vs Production App:**
-- Dev mode uses `twentyfirst-agents-dev://` protocol
-- Dev mode uses separate userData path (`~/Library/Application Support/Agents Dev/`)
-- This prevents conflicts between dev and production installs
-
-## Releasing a New Version
-
-### Prerequisites for Notarization
-
-- Keychain profile: `21st-notarize`
-- Create with: `xcrun notarytool store-credentials "21st-notarize" --apple-id YOUR_APPLE_ID --team-id YOUR_TEAM_ID`
-
-### Release Commands
-
-```bash
-# Full release (build, sign, submit notarization, upload to CDN)
-bun run release
-
-# Or step by step:
-bun run build              # Compile TypeScript
-bun run package:mac        # Build & sign macOS app
-bun run dist:manifest      # Generate latest-mac.yml manifests
-./scripts/upload-release-wrangler.sh  # Submit notarization & upload to R2 CDN
-```
-
-### Bump Version Before Release
-
-```bash
-npm version patch --no-git-tag-version  # 0.0.27 → 0.0.28
-```
-
-### After Release Script Completes
-
-1. Wait for notarization (2-5 min): `xcrun notarytool history --keychain-profile "21st-notarize"`
-2. Staple DMGs: `cd release && xcrun stapler staple *.dmg`
-3. Re-upload stapled DMGs to R2 and GitHub (see RELEASE.md for commands)
-4. Update changelog: `gh release edit v0.0.X --notes "..."`
-5. **Upload manifests (triggers auto-updates!)** — see RELEASE.md
-6. Sync to public: `./scripts/sync-to-public.sh`
-
-### Files Uploaded to CDN
-
-| File | Purpose |
-|------|---------|
-| `latest-mac.yml` | Manifest for arm64 auto-updates |
-| `latest-mac-x64.yml` | Manifest for Intel auto-updates |
-| `1Code-{version}-arm64-mac.zip` | Auto-update payload (arm64) |
-| `1Code-{version}-mac.zip` | Auto-update payload (Intel) |
-| `1Code-{version}-arm64.dmg` | Manual download (arm64) |
-| `1Code-{version}.dmg` | Manual download (Intel) |
-
-### Auto-Update Flow
-
-1. App checks `https://cdn.21st.dev/releases/desktop/latest-mac.yml` on startup and when window regains focus (with 1 min cooldown)
-2. If version in manifest > current version, shows "Update Available" banner
-3. User clicks Download → downloads ZIP in background
-4. User clicks "Restart Now" → installs update and restarts
-
-## Current Status (WIP)
-
-**Done:**
-- Drizzle ORM setup with schema (projects, chats, sub_chats)
-- Auto-migration on app startup
-- tRPC routers structure
-
-**In Progress:**
-- Replacing `mock-api.ts` with real tRPC calls in renderer
-- ProjectSelector component (local folder picker)
-
-**Planned:**
-- Git worktree per chat (isolation)
-- Claude Code execution in worktree path
-- Full feature parity with web app
+When compacting, always preserve: the list of modified files, the current task context, any test commands or verification steps, and the tRPC router structure being worked on.
