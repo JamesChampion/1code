@@ -6,6 +6,39 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **1Code** — An Electron desktop app providing a visual UI for AI-powered code assistance. Users create chat sessions linked to local project folders, interact with Claude in Plan or Agent mode, and see real-time tool execution (bash, file edits, web search). Built by the 21st.dev team.
 
+## Environment Setup
+
+**Required for development:**
+
+```bash
+# Install Bun (package manager)
+curl -fsSL https://bun.sh/install | bash
+
+# Clone and setup
+git clone <repo>
+cd 1code
+bun install
+bun run claude:download  # REQUIRED before first dev run
+```
+
+**Optional environment variables** (`.env.local`):
+
+```bash
+# Analytics (disabled by default in dev)
+MAIN_VITE_POSTHOG_KEY=your_key
+VITE_POSTHOG_KEY=your_key
+
+# Error tracking (disabled by default)
+MAIN_VITE_SENTRY_DSN=your_dsn
+
+# OpenAI voice transcription
+MAIN_VITE_OPENAI_API_KEY=your_key
+
+# Custom Claude endpoint (for self-hosted)
+ANTHROPIC_BASE_URL=http://localhost:8080
+ANTHROPIC_API_KEY=your_key
+```
+
 ## Commands
 
 ```bash
@@ -32,6 +65,35 @@ bun run release
 ```
 
 There is no test suite or linter configured in this project.
+
+## Troubleshooting
+
+**"Agent chat doesn't work" after fresh clone:**
+```bash
+bun run claude:download  # Downloads required Claude binary
+```
+
+**"better-sqlite3" build errors:**
+```bash
+bun install  # Rebuilds native modules via postinstall
+# If fails: delete node_modules and reinstall
+```
+
+**"Protocol handler not working" on macOS:**
+- First launch may not register protocol
+- Click "Sign in" again to trigger registration
+- Restart app if needed
+
+**TypeScript errors:**
+```bash
+bun run ts:check  # Validate types without building
+```
+
+**Database schema mismatch:**
+- Migrations auto-run on startup
+- Dev: migrations in `drizzle/`
+- Prod: migrations in `resources/migrations/`
+- Both must stay in sync
 
 ## Architecture
 
@@ -79,6 +141,27 @@ claudeCodeCredentials → single-row OAuth token storage
 
 Migrations live in `drizzle/` (dev) or `resources/migrations` (packaged). Auto-run on startup via `initDatabase()`.
 
+## Common Development Tasks
+
+**Add a new tRPC router:**
+1. Create router: `src/main/lib/trpc/routers/my-feature.ts`
+2. Export from: `src/main/lib/trpc/routers/index.ts`
+3. Use in renderer: `trpc.myFeature.myProcedure.useQuery()`
+
+**Add a new tool renderer:**
+1. Create component: `src/renderer/features/agents/ui/agent-my-tool.tsx`
+2. Register in: `src/renderer/features/agents/ui/agent-tool-registry.tsx`
+3. Tool name must match Claude SDK tool use name
+
+**Add a new settings tab:**
+1. Create tab: `src/renderer/components/dialogs/settings-tabs/my-tab.tsx`
+2. Add to dialog: `src/renderer/components/dialogs/agents-settings-dialog.tsx`
+
+**Add database table:**
+1. Add schema: `src/main/lib/db/schema/index.ts`
+2. Generate migration: `bun run db:generate`
+3. Migration auto-runs on next app start
+
 ## Key Patterns
 
 - **All backend calls use tRPC** — no raw IPC. Routers in `src/main/lib/trpc/routers/`, client in `src/renderer/lib/trpc.ts`
@@ -108,10 +191,26 @@ Migrations live in `drizzle/` (dev) or `resources/migrations` (packaged). Auto-r
 ## Important Gotchas
 
 - `bun run claude:download` must be run before first `bun run dev` — without the Claude binary, agent chat won't function
-- The `mock-api.ts` in renderer is DEPRECATED — all new code should use real tRPC calls
+- **mock-api.ts is DEPRECATED** — Use tRPC directly: `trpc.router.procedure.useQuery()` instead of mock-api wrappers. See `src/renderer/lib/trpc.ts` for client setup.
 - DevTools unlock requires 5 clicks on a hidden UI element (not exposed by default)
 - Protocol handler registration on macOS may not work on first app launch — users may need to click "Sign in" again
 - Analytics (PostHog) and error tracking (Sentry) are disabled in open source builds unless env vars are set in `.env.local`
+
+## Verification
+
+**No automated test suite configured.** Verify changes manually:
+
+```bash
+bun run ts:check           # Type validation
+bun run build              # Compilation check
+bun run dev                # Manual testing in Electron
+```
+
+**Critical paths to verify:**
+- Create new chat → send message → see response
+- Git changes panel → stage files → commit
+- Terminal → run command → see output
+- Settings → change theme → see update
 
 ## Compact Instructions
 
